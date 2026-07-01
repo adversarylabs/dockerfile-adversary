@@ -1,0 +1,30 @@
+name: local/dockerfile-adversary
+version: 0.1.0
+description: Replace with a description.
+
+triggers:
+  manual: true
+  files_changed:
+    - Dockerfile
+    - "**/Dockerfile"
+    - Dockerfile.*
+    - "**/Dockerfile.*"
+    - "*.dockerfile"
+    - "**/*.dockerfile"
+
+runtime:
+  image: local/dockerfile-adversary:0.1.0
+  command:
+    - /adversary/run
+
+permissions:
+  filesystem:
+    read:
+      - .
+    write:
+      - .adversary/results
+  network: false
+  env: []
+
+findings:
+  format: adversary.findings.v1
