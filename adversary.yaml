@@ -13,9 +13,10 @@ triggers:
     - "**/*.dockerfile"
 
 runtime:
-  image: local/dockerfile-adversary:0.1.0
+  name: node
+  version: "22"
   command:
-    - /adversary/run
+    - dist/index.js
 
 permissions:
   filesystem:
