@@ -1,6 +1,6 @@
-name: local/dockerfile-adversary
+name: dockerfile
 version: 0.1.0
-description: Replace with a description.
+description: Discovers Dockerfile-style files and flags them for container build and runtime security review.
 
 triggers:
   manual: true

@@ -4,7 +4,7 @@ import { Adversary, Finding, Severity, log } from "@adversary/sdk";
 
 export function createApp(): Adversary {
   const app = new Adversary({
-    name: "local/dockerfile-adversary",
+    name: "dockerfile",
   });
 
   app.rule("dockerfile.discovered", async (ctx) => {
