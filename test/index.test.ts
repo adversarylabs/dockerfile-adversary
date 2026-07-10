@@ -46,7 +46,7 @@ test("three uses of the same unpinned image become grouped observations", async 
   assert.equal(grouped.summary, "Three stages reference node:22-bookworm-slim by tag rather than digest.");
   assert.equal(grouped.evidence.length, 3);
   assert.deepEqual(
-    grouped.evidence.map((evidence) => evidence.line),
+    grouped.evidence.map((evidence) => evidence.location?.line),
     [1, 6, 12],
   );
   assert.equal(grouped.evidence[0].data?.image, "node:22-bookworm-slim");
@@ -67,7 +67,7 @@ test("positive signals and opinion use structured review APIs", async () => {
       "dockerfile.runtime.artifacts-only:Dockerfile",
     ],
   );
-  assert.equal(output.observations.length, 0);
+  assert.equal(output.observations[0].key, "dockerfile.stage-layout:Dockerfile");
   assert.equal(output.assessment?.risk, "low");
   assert.equal(output.opinion?.ship, true);
   assert.match(output.opinion?.summary ?? "", /ship/i);
@@ -160,7 +160,7 @@ test("JSON output contains structured evidence and metadata", async () => {
   assert.equal(Array.isArray(finding.evidence), true);
   assert.equal(typeof finding.evidence[0].data, "object");
   assert.equal(finding.evidence[0].data.stage, "deps");
-  assert.equal(finding.evidence[0].file, "Dockerfile");
+  assert.equal(finding.evidence[0].location.file, "Dockerfile");
   assert.equal(finding.category, "supply-chain");
   assert.equal(finding.confidence, "medium");
 });

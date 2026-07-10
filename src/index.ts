@@ -37,7 +37,20 @@ interface RepositoryContext {
 const SECRET_NAME_PATTERN = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|ACCESS_KEY|AUTH|CREDENTIAL)(?:_|$)/i;
 const MAX_REPOSITORY_FILES = 600;
 const MAX_DISCOVERY_FILES = 5000;
-const SKIPPED_DIRECTORIES = new Set([".adversary", ".git", ".hg", ".svn", "coverage", "dist", "node_modules", "target", "vendor"]);
+const SKIPPED_DIRECTORIES = new Set([
+  ".adversary",
+  ".depot",
+  ".direnv",
+  ".git",
+  ".hg",
+  ".next",
+  ".svn",
+  "coverage",
+  "dist",
+  "node_modules",
+  "target",
+  "vendor",
+]);
 
 export function createApp(): Adversary {
   registerDockerfileRules();
@@ -49,7 +62,6 @@ export function createApp(): Adversary {
     const severities: string[] = [];
 
     ctx.summary.files_scanned = dockerfiles.length;
-    ctx.summary.repository_files_sampled = repo.files.length;
 
     for (const dockerfile of dockerfiles) {
       reportBaseImageObservations(ctx, dockerfile, repo, severities);
@@ -312,19 +324,23 @@ async function walkRepository(repoPath: string, maxFiles = MAX_REPOSITORY_FILES)
     }
 
     entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
+    for (const entry of entries.filter((candidate) => candidate.isFile())) {
       if (files.length >= maxFiles) {
         return;
       }
 
       const relativePath = directory === "" ? entry.name : join(directory, entry.name);
-      const posixPath = toPosixPath(relativePath);
-      if (entry.isDirectory()) {
-        if (!SKIPPED_DIRECTORIES.has(entry.name)) {
-          await visit(posixPath);
-        }
-      } else if (entry.isFile()) {
-        files.push(posixPath);
+      files.push(toPosixPath(relativePath));
+    }
+
+    for (const entry of entries.filter((candidate) => candidate.isDirectory())) {
+      if (files.length >= maxFiles) {
+        return;
+      }
+
+      if (!SKIPPED_DIRECTORIES.has(entry.name)) {
+        const relativePath = directory === "" ? entry.name : join(directory, entry.name);
+        await visit(toPosixPath(relativePath));
       }
     }
   }
@@ -544,5 +560,5 @@ function toPosixPath(path: string): string {
 }
 
 if (process.argv[1] !== undefined && import.meta.url === new URL(process.argv[1], "file:").href) {
-  await createApp().run();
+  await createApp().runFromEnvironment();
 }

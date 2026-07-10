@@ -1,4 +1,4 @@
-import { type Confidence, type Evidence, type RuleContext, type Severity as SeverityValue } from "@adversarylabs/sdk";
+import { type Confidence, type EvidenceInput, type RuleContext, type Severity as SeverityValue } from "@adversarylabs/sdk";
 
 type RuleTitle = {
   singular: string;
@@ -28,7 +28,7 @@ export type DockerObservationInput = {
   subject: string;
   severity: SeverityValue;
   confidence: Confidence | number;
-  location?: Evidence;
+  location?: EvidenceInput;
   evidence?: Record<string, unknown>;
   tags?: string[];
   metadata?: Record<string, unknown>;
