@@ -4,12 +4,17 @@ This adversary reviews Dockerfile-style files for container build and runtime se
 
 Current implementation status:
 
-- Implemented: `dockerfile.discovered`
-- Planned: all other checks listed below
+- Implemented structured observation: `dockerfile.base-image.unpinned-digest`
+- Implemented structured observation: `dockerfile.secret.arg-env`
+- Implemented structured observation: `dockerfile.copy.broad-context`
+- Implemented structured observation: `dockerfile.runtime.root-user`
+- Implemented review positives and neutral observations through `ctx.review.*`
+- Removed adversary-local grouping, deduplication, ranking, suppression, and terminal formatting
+- Planned: additional expert review concerns listed below
 
-The planned checks are intentionally conservative. They should produce deterministic findings, include line-level evidence where possible, and avoid findings that require knowing the application runtime contract.
+The adversary reports structured evidence through the SDK. The SDK owns grouping, deduplication, ranking, suppression, finding synthesis, and renderer-specific output.
 
-Recommended implementation priority:
+Recommended future implementation priority:
 
 - `dockerfile.context.sensitive-file-not-ignored`
 - `dockerfile.copy.from-external-unpinned`
@@ -30,21 +35,11 @@ Recommended implementation priority:
 - Docker Build checks reference: https://docs.docker.com/reference/build-checks/
 - Hadolint rules reference: https://github.com/hadolint/hadolint#rules
 
-## Discovery
-
-### `dockerfile.discovered`
-
-- Status: implemented
-- Severity: low
-- Check: discover Dockerfile-style files named `Dockerfile`, `Dockerfile.*`, or `*.dockerfile`.
-- Finding: emit one informational finding per discovered file so reviewers know where Docker image definitions exist.
-- Recommendation: review base image pinning, secret handling, user privileges, package installation, and exposed ports.
-
 ## Base Images
 
 ### `dockerfile.base.latest-tag`
 
-- Status: planned
+- Status: covered by `dockerfile.base-image.unpinned-digest`
 - Severity: medium
 - Check: flag `FROM` images that use `latest` or omit an explicit tag.
 - Rationale: mutable tags reduce reproducibility and can introduce unexpected changes.
@@ -52,7 +47,7 @@ Recommended implementation priority:
 
 ### `dockerfile.base.unpinned-digest`
 
-- Status: planned
+- Status: covered by `dockerfile.base-image.unpinned-digest`
 - Severity: low
 - Check: flag `FROM` images that use a tag but do not include an image digest.
 - Rationale: tags are mutable even when they look versioned.
@@ -78,7 +73,7 @@ Recommended implementation priority:
 
 ### `dockerfile.context.missing-dockerignore`
 
-- Status: planned
+- Status: covered when paired with broad copy evidence by `dockerfile.copy.broad-context`
 - Severity: medium
 - Check: flag repositories that contain Dockerfile-style files but no `.dockerignore` adjacent to the build context.
 - Rationale: large or sensitive files can be sent to the build context accidentally.
@@ -86,7 +81,7 @@ Recommended implementation priority:
 
 ### `dockerfile.context.copy-all`
 
-- Status: planned
+- Status: covered by `dockerfile.copy.broad-context`
 - Severity: low
 - Check: flag broad `COPY . ...` or `ADD . ...` instructions.
 - Rationale: broad copies make image contents depend on the entire build context and increase the chance of copying sensitive or unnecessary files.
@@ -112,7 +107,7 @@ Recommended implementation priority:
 
 ### `dockerfile.secrets.arg-env`
 
-- Status: planned
+- Status: covered by `dockerfile.secret.arg-env`
 - Severity: high
 - Check: flag `ARG` or `ENV` names that appear to hold secrets, such as `TOKEN`, `SECRET`, `PASSWORD`, `PRIVATE_KEY`, `API_KEY`, `AWS_SECRET_ACCESS_KEY`, or similar names.
 - Rationale: Docker Build includes a `SecretsUsedInArgOrEnv` check; ARG and ENV values can persist in metadata or image history.
@@ -146,7 +141,7 @@ Recommended implementation priority:
 
 ### `dockerfile.user.missing-nonroot`
 
-- Status: planned
+- Status: covered by `dockerfile.runtime.root-user`
 - Severity: medium
 - Check: flag final stages that do not set `USER`, or set `USER root`.
 - Rationale: Docker recommends using `USER` to switch to a non-root user when the service can run without privileges.

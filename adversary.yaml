@@ -1,6 +1,6 @@
 name: dockerfile
 version: 0.1.0
-description: Discovers Dockerfile-style files and flags them for container build and runtime security review.
+description: Reviews Dockerfile-style files for container build and runtime security concerns.
 
 triggers:
   manual: true

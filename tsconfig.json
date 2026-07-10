@@ -12,7 +12,7 @@
     "declaration": true,
     "typeRoots": ["node_modules/@types"],
     "paths": {
-      "@adversary/sdk": ["./vendor/adversary-sdk/dist/index.d.ts"]
+      "@adversary/sdk": ["../adversary-sdk-typescript"]
     }
   },
   "include": ["src/**/*.ts"]

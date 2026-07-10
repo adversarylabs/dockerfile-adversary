@@ -1,5 +1,5 @@
 {
-  "name": "dockerfile-adversary",
+  "name": "dockerfile",
   "version": "0.1.0",
   "type": "module",
   "private": true,
@@ -8,7 +8,7 @@
     "test": "npm run build && tsx --test test/*.test.ts"
   },
   "dependencies": {
-    "@adversary/sdk": "file:vendor/adversary-sdk"
+    "@adversary/sdk": "file:../adversary-sdk-typescript"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",

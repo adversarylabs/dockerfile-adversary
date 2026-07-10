@@ -1,6 +1,6 @@
-# dockerfile-adversary
+# dockerfile
 
-Replace with a description.
+Inspects Dockerfile-style files and reports structured review observations through the Adversary SDK.
 
 ## Build
 
@@ -29,5 +29,5 @@ npm test
 - `dist/index.js` is prebuilt so `adversary run . --repo ...` works immediately.
 - `test/index.test.ts` demonstrates testing rules with fixtures.
 - `fixtures/clean` should produce no findings.
-- `fixtures/vulnerable` should produce one finding.
+- `fixtures/vulnerable` should produce actionable Dockerfile findings.
 - `Dockerfile` packages the compiled adversary for the CLI.

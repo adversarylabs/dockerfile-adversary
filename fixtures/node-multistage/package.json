@@ -1,0 +1,9 @@
+{
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/server.js"
+  },
+  "dependencies": {
+    "express": "1.0.0"
+  }
+}
