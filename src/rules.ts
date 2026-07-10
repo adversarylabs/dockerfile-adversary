@@ -1,4 +1,4 @@
-import { type Confidence, type Evidence, type RuleContext, type Severity as SeverityValue } from "@adversary/sdk";
+import { type Confidence, type Evidence, type RuleContext, type Severity as SeverityValue } from "@adversarylabs/sdk";
 
 type RuleTitle = {
   singular: string;

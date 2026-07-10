@@ -2,7 +2,7 @@
 
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
-import { Adversary, Severity, type RuleContext } from "@adversary/sdk";
+import { Adversary, Severity, type RuleContext } from "@adversarylabs/sdk";
 import { observeDockerRule, registerDockerfileRules } from "./rules.js";
 
 interface DockerfileInstruction {

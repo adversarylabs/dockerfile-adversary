@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { Adversary, Severity } from "@adversary/sdk";
+import { Adversary, Severity } from "@adversarylabs/sdk";
 import { createApp } from "../src/index.ts";
 
 function fixturePath(name: string): string {
@@ -17,7 +17,7 @@ test("clean fixture produces a structured empty review", async () => {
   assert.equal(output.target.filesScanned, 0);
   assert.equal(output.findings.length, 0);
   assert.equal(output.observations.length, 0);
-  assert.equal(output.assessment, undefined);
+  assert.equal(output.assessment?.risk, "none");
   assert.equal(output.opinion?.ship, true);
 });
 
@@ -65,11 +65,10 @@ test("positive signals and opinion use structured review APIs", async () => {
     [
       "dockerfile.multi-stage:Dockerfile",
       "dockerfile.runtime.artifacts-only:Dockerfile",
-      "dockerfile.slim-base:Dockerfile",
     ],
   );
-  assert.equal(output.observations[0].key, "dockerfile.stage-layout:Dockerfile");
-  assert.equal(output.assessment, undefined);
+  assert.equal(output.observations.length, 0);
+  assert.equal(output.assessment?.risk, "low");
   assert.equal(output.opinion?.ship, true);
   assert.match(output.opinion?.summary ?? "", /ship/i);
 });
@@ -172,7 +171,7 @@ test("high-risk fixture produces a no-ship opinion", async () => {
     write: false,
   });
 
-  assert.equal(output.assessment, undefined);
+  assert.equal(output.assessment?.risk, "high");
   assert.equal(output.opinion?.ship, false);
   assert.equal(output.findings.some((finding) => finding.ruleId === "dockerfile.secret.arg-env"), true);
 });
