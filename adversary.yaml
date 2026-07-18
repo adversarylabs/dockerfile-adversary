@@ -25,7 +25,8 @@ permissions:
     write:
       - .adversary/results
   network: false
-  env: []
+  environment:
+    allow: []
 
 findings:
   format: adversary.review.v1
