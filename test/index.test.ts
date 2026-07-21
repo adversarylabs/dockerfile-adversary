@@ -42,7 +42,7 @@ test("three uses of the same unpinned image become grouped observations", async 
   const grouped = output.findings.find((finding) => finding.ruleId === "dockerfile.base-image.unpinned-digest");
   assert.ok(grouped);
   assert.equal(grouped.groupKey, "dockerfile.base-image.unpinned-digest:node:22-bookworm-slim");
-  assert.equal(grouped.synthesisSource, "generic");
+  assert.equal("synthesisSource" in grouped, false);
   assert.equal(grouped.summary, "Three stages reference node:22-bookworm-slim by tag rather than digest.");
   assert.equal(grouped.evidence.length, 3);
   assert.deepEqual(
@@ -134,7 +134,7 @@ test("broad COPY with avoidable context is reported as structured evidence", asy
 
   const finding = output.findings.find((item) => item.ruleId === "dockerfile.copy.broad-context");
   assert.ok(finding);
-  assert.equal(finding.synthesisSource, "generic");
+  assert.equal("synthesisSource" in finding, false);
   assert.equal(finding.evidence[0].data?.effectiveFileCount, 2);
 });
 

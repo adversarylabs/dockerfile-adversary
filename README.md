@@ -31,3 +31,7 @@ npm test
 - `fixtures/clean` should produce no findings.
 - `fixtures/vulnerable` should produce actionable Dockerfile findings.
 - `Dockerfile` packages the compiled adversary for the CLI.
+
+## Automatic detection
+
+`adversary auto` selects the dockerfile adversary when changes include `Dockerfile` or `**/Dockerfile`, plus the other domain-specific patterns declared in `adversary.yaml`. Unrelated changes do not select it.

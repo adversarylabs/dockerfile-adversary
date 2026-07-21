@@ -12,6 +12,17 @@ triggers:
     - "*.dockerfile"
     - "**/*.dockerfile"
 
+detection:
+  files:
+    - "Dockerfile"
+    - "**/Dockerfile"
+    - "Dockerfile.*"
+    - "**/Dockerfile.*"
+    - "*.dockerfile"
+    - "**/*.dockerfile"
+    - ".dockerignore"
+    - "**/.dockerignore"
+
 runtime:
   name: node
   version: "22"
