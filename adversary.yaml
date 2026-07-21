@@ -1,5 +1,5 @@
 name: dockerfile
-version: 0.0.5
+version: 0.0.6
 description: Reviews Dockerfile-style files for container build and runtime security concerns.
 
 triggers:
