@@ -4,6 +4,7 @@ import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
 import { Adversary, Severity, type RuleContext } from "@adversarylabs/sdk";
 import { observeDockerRule, registerDockerfileRules } from "./rules.js";
+import { runModelDockerfileReview } from "./model-review.js";
 
 interface DockerfileInstruction {
   keyword: string;
@@ -60,19 +61,39 @@ export function createApp(): Adversary {
     const dockerfiles = await loadDockerfiles(ctx);
     const repo = await inspectRepository(ctx);
     const severities: string[] = [];
+    const detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = [];
 
     ctx.summary.files_scanned = dockerfiles.length;
 
     for (const dockerfile of dockerfiles) {
-      reportBaseImageObservations(ctx, dockerfile, repo, severities);
-      reportSecretObservations(ctx, dockerfile, severities);
-      reportBroadCopyObservations(ctx, dockerfile, repo, severities);
-      reportRuntimeObservations(ctx, dockerfile, severities);
+      reportBaseImageObservations(ctx, dockerfile, repo, severities, detections);
+      reportSecretObservations(ctx, dockerfile, severities, detections);
+      reportBroadCopyObservations(ctx, dockerfile, repo, severities, detections);
+      reportRuntimeObservations(ctx, dockerfile, severities, detections);
       reportPositiveSignals(ctx, dockerfile);
       reportReviewObservations(ctx, dockerfile);
     }
 
-    reportOpinion(ctx, dockerfiles, severities);
+    const sources = [];
+    for (const df of dockerfiles) {
+      try {
+        const { readFile } = await import("node:fs/promises");
+        const { join } = await import("node:path");
+        sources.push({ path: df.path, content: await readFile(join(ctx.repoPath, df.path), "utf8") });
+      } catch {
+        // ignore
+      }
+    }
+    const modelStatus = await runModelDockerfileReview(
+      ctx,
+      detections,
+      sources,
+      severities,
+      detections[0]?.message,
+    );
+    if (modelStatus === "unavailable") {
+      reportOpinion(ctx, dockerfiles, severities);
+    }
   });
 
   return app;
@@ -124,13 +145,14 @@ async function inspectRepository(ctx: RuleContext): Promise<RepositoryContext> {
   };
 }
 
-function reportBaseImageObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, repo: RepositoryContext, severities: string[]): void {
+function reportBaseImageObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, repo: RepositoryContext, severities: string[], detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = []): void {
   for (const stage of dockerfile.stages) {
     if (isScratch(stage.image) || hasDigest(stage.image)) {
       continue;
     }
 
     severities.push(Severity.Low);
+    detections.push({ ruleId: "dockerfile.base-image.unpinned-digest", file: dockerfile.path, line: stage.from.line, snippet: stage.from.raw, message: "Base image not pinned by digest", severity: Severity.Low });
     observeDockerRule(ctx, {
       ruleId: "dockerfile.base-image.unpinned-digest",
       subject: stage.image,
@@ -147,7 +169,7 @@ function reportBaseImageObservations(ctx: RuleContext, dockerfile: ParsedDockerf
   }
 }
 
-function reportSecretObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, severities: string[]): void {
+function reportSecretObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, severities: string[], detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = []): void {
   for (const instruction of dockerfile.instructions) {
     if (instruction.keyword !== "ARG" && instruction.keyword !== "ENV") {
       continue;
@@ -159,6 +181,7 @@ function reportSecretObservations(ctx: RuleContext, dockerfile: ParsedDockerfile
       }
 
       severities.push(Severity.High);
+      detections.push({ ruleId: "dockerfile.secret.arg-env", file: dockerfile.path, line: instruction.line, snippet: instruction.raw, message: `Secret-like ${name} in ARG/ENV`, severity: Severity.High });
       observeDockerRule(ctx, {
         ruleId: "dockerfile.secret.arg-env",
         subject: name,
@@ -174,7 +197,7 @@ function reportSecretObservations(ctx: RuleContext, dockerfile: ParsedDockerfile
   }
 }
 
-function reportBroadCopyObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, repo: RepositoryContext, severities: string[]): void {
+function reportBroadCopyObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, repo: RepositoryContext, severities: string[], detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = []): void {
   for (const stage of dockerfile.stages) {
     for (const instruction of stage.instructions) {
       if ((instruction.keyword !== "COPY" && instruction.keyword !== "ADD") || !copiesWholeContext(instruction.value)) {
@@ -192,6 +215,7 @@ function reportBroadCopyObservations(ctx: RuleContext, dockerfile: ParsedDockerf
       }
 
       severities.push(Severity.Info);
+      detections.push({ ruleId: "dockerfile.copy.broad-context", file: dockerfile.path, line: instruction.line, snippet: instruction.raw, message: "Broad COPY of build context", severity: Severity.Info });
       observeDockerRule(ctx, {
         ruleId: "dockerfile.copy.broad-context",
         subject: dockerfile.path,
@@ -212,7 +236,7 @@ function reportBroadCopyObservations(ctx: RuleContext, dockerfile: ParsedDockerf
   }
 }
 
-function reportRuntimeObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, severities: string[]): void {
+function reportRuntimeObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, severities: string[], detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = []): void {
   const stage = dockerfile.stages.find((candidate) => candidate.isFinal);
   if (stage === undefined) {
     return;
@@ -224,6 +248,7 @@ function reportRuntimeObservations(ctx: RuleContext, dockerfile: ParsedDockerfil
   }
 
   severities.push(Severity.Medium);
+  detections.push({ ruleId: "dockerfile.runtime.root-user", file: dockerfile.path, line: lastUser?.line ?? stage.from.line, snippet: lastUser?.raw ?? stage.from.raw, message: "Runtime stage runs as root", severity: Severity.Medium });
   observeDockerRule(ctx, {
     ruleId: "dockerfile.runtime.root-user",
     subject: dockerfile.path,

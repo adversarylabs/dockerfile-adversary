@@ -1,5 +1,5 @@
 name: dockerfile
-version: 0.0.6
+version: 0.0.7
 description: Reviews Dockerfile-style files for container build and runtime security concerns.
 
 triggers:
@@ -36,6 +36,7 @@ permissions:
     write:
       - .adversary/results
   network: false
+  model: true
   environment:
     allow: []
 
