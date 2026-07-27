@@ -2,6 +2,7 @@ import {
   formatOpinion,
   isOpinionConcernPhrase,
   ModelUnavailableError,
+  ModelReviewError,
   requireOpinionConcern,
   type ModelReviewRequest,
   type RuleContext,
@@ -182,6 +183,9 @@ export async function runModelDockerfileReview(
     return "applied";
   } catch (error) {
     if (error instanceof ModelUnavailableError) return "unavailable";
+    if (error instanceof ModelReviewError || (error instanceof Error && /model|broker|fireworks|openai|anthropic/i.test(error.message))) {
+      return "unavailable";
+    }
     throw error;
   }
 }
