@@ -1,10 +1,10 @@
 {
   "name": "dockerfile",
-  "version": "0.0.8",
+  "version": "0.0.9",
   "type": "module",
   "private": true,
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json --noEmit && node scripts/build.mjs",
     "test": "npm run build && tsx --test test/*.test.ts"
   },
   "dependencies": {
@@ -12,6 +12,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
+    "esbuild": "^0.28.1",
     "tsx": "^4.20.6",
     "typescript": "^5.7.2"
   }
