@@ -117,6 +117,78 @@ export const dockerfileRules = [
     tags: ["runtime", "production"],
     groupKey: (observation) => `dockerfile.runtime.root-user:${observation.location?.file ?? observation.subject}`,
   }),
+  defineRule({
+    id: "dockerfile.add.remote-url",
+    category: "supply-chain",
+    title: {
+      singular: "ADD fetches a remote URL",
+      plural: "ADD instructions fetch remote URLs",
+    },
+    summary: {
+      singular: "{subject} uses ADD with a remote URL.",
+      grouped: "{count} ADD instructions fetch remote URLs.",
+    },
+    whyItMatters: "Remote ADD content is mutable and hard to audit compared to COPY of vendored artifacts.",
+    impact: "A future build may pull different remote content without a Dockerfile change.",
+    recommendation: "Prefer COPY of verified local artifacts, or pin remote inputs with digests and checksum verification.",
+    remediation: { complexity: "small" },
+    tags: ["supply-chain"],
+    groupKey: (observation) => `dockerfile.add.remote-url:${observation.location?.file ?? observation.subject}`,
+  }),
+  defineRule({
+    id: "dockerfile.shell.curl-bash",
+    category: "supply-chain",
+    title: {
+      singular: "curl|bash install pattern",
+      plural: "curl|bash install patterns",
+    },
+    summary: {
+      singular: "{subject} pipes a remote script into a shell.",
+      grouped: "{count} RUN instructions pipe remote scripts into a shell.",
+    },
+    whyItMatters: "Pipe-to-shell installs execute unpinned remote code during image builds.",
+    impact: "A compromised download endpoint can inject code into every build.",
+    recommendation: "Download, verify checksum/signature, then execute a pinned artifact.",
+    remediation: { complexity: "small" },
+    tags: ["supply-chain"],
+    groupKey: (observation) => `dockerfile.shell.curl-bash:${observation.location?.file ?? observation.subject}`,
+  }),
+  defineRule({
+    id: "dockerfile.ignore.missing",
+    category: "build-context",
+    title: {
+      singular: "Missing .dockerignore with broad COPY",
+      plural: "Missing .dockerignore with broad COPY",
+    },
+    summary: {
+      singular: "{subject} copies the full context without a .dockerignore.",
+      grouped: "{count} Dockerfiles copy the full context without a .dockerignore.",
+    },
+    whyItMatters: "Without .dockerignore, secrets and local debris can enter the build context.",
+    impact: "Larger context, slower builds, and risk of packing local credentials into layers.",
+    recommendation: "Add a .dockerignore that excludes VCS metadata, env files, and local secrets.",
+    remediation: { complexity: "trivial" },
+    tags: ["build-context"],
+    groupKey: (observation) => `dockerfile.ignore.missing:${observation.location?.file ?? observation.subject}`,
+  }),
+  defineRule({
+    id: "dockerfile.secret.rm-later-layer",
+    category: "secrets",
+    title: {
+      singular: "Secret removed in a later layer",
+      plural: "Secrets removed in later layers",
+    },
+    summary: {
+      singular: "{subject} adds a credential-like file then removes it later.",
+      grouped: "{count} credential-like files are removed only in later layers.",
+    },
+    whyItMatters: "Deleting a secret in a later RUN does not remove it from earlier image layers.",
+    impact: "Credentials remain recoverable from image history.",
+    recommendation: "Use BuildKit --mount=type=secret so secrets never land in a layer.",
+    remediation: { complexity: "small" },
+    tags: ["secrets"],
+    groupKey: (observation) => `dockerfile.secret.rm-later-layer:${observation.location?.file ?? observation.subject}`,
+  }),
 ] satisfies RuleDefinition[];
 
 const dockerRuleMap = new Map(dockerfileRules.map((rule) => [rule.id, rule]));

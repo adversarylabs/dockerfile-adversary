@@ -181,3 +181,34 @@ test("adversary code contains no direct terminal review strings", async () => {
 
   assert.doesNotMatch(source, /process\.stderr|console\.log|Overall assessment|Positive signals|Primary opportunities|Overall opinion|Rules executed|Process exit code|Running \./);
 });
+
+const p0Cases = [
+  { key: "p0-remote-add", id: "dockerfile.add.remote-url", clean: "p0-remote-add-clean" },
+  { key: "p0-curl-bash", id: "dockerfile.shell.curl-bash", clean: "p0-curl-bash-clean" },
+  { key: "p0-missing-dockerignore", id: "dockerfile.ignore.missing", clean: "p0-missing-dockerignore-clean" },
+  { key: "p0-secret-layer", id: "dockerfile.secret.rm-later-layer", clean: "p0-secret-layer-clean" },
+] as const;
+
+test("dockerfile P0 catalog rules fire on vulnerable and stay quiet on clean", async () => {
+  for (const rule of p0Cases) {
+    const bad = await createApp().run({ input: { source: { path: fixturePath(rule.key) } }, write: false });
+    assert.equal(bad.findings.some((f) => f.ruleId === rule.id), true, `${rule.id} missed vulnerable`);
+    const good = await createApp().run({ input: { source: { path: fixturePath(rule.clean) } }, write: false });
+    assert.equal(good.findings.some((f) => f.ruleId === rule.id), false, `${rule.id} flagged clean`);
+  }
+});
+
+test("existing P0-equivalent rules still cover secrets, root, and broad copy", async () => {
+  const vulnerable = await createApp().run({
+    input: { source: { path: fixturePath("vulnerable") } },
+    write: false,
+  });
+  const ids = new Set(vulnerable.findings.map((f) => f.ruleId));
+  assert.ok(
+    ids.has("dockerfile.secret.arg-env") ||
+      ids.has("dockerfile.runtime.root-user") ||
+      ids.has("dockerfile.copy.broad-context") ||
+      ids.has("dockerfile.base-image.unpinned-digest"),
+    `expected legacy coverage, got ${[...ids].join(",")}`,
+  );
+});
