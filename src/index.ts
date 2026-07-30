@@ -70,6 +70,10 @@ export function createApp(): Adversary {
       reportSecretObservations(ctx, dockerfile, severities, detections);
       reportBroadCopyObservations(ctx, dockerfile, repo, severities, detections);
       reportRuntimeObservations(ctx, dockerfile, severities, detections);
+      reportRemoteAddObservations(ctx, dockerfile, severities, detections);
+      reportCurlBashObservations(ctx, dockerfile, severities, detections);
+      reportMissingDockerignoreObservations(ctx, dockerfile, repo, severities, detections);
+      reportSecretLayerHistoryObservations(ctx, dockerfile, severities, detections);
       reportPositiveSignals(ctx, dockerfile);
       reportReviewObservations(ctx, dockerfile);
     }
@@ -261,6 +265,136 @@ function reportRuntimeObservations(ctx: RuleContext, dockerfile: ParsedDockerfil
       defaultUser: lastUser === undefined ? "root" : lastUser.value,
     },
   });
+}
+
+function reportRemoteAddObservations(
+  ctx: RuleContext,
+  dockerfile: ParsedDockerfile,
+  severities: string[],
+  detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = [],
+): void {
+  for (const instruction of dockerfile.instructions) {
+    if (instruction.keyword !== "ADD") continue;
+    if (!/^https?:\/\//i.test(instruction.value.trim().split(/\s+/)[0] ?? "")) continue;
+    severities.push(Severity.High);
+    detections.push({
+      ruleId: "dockerfile.add.remote-url",
+      file: dockerfile.path,
+      line: instruction.line,
+      snippet: instruction.raw,
+      message: "ADD fetches a remote URL",
+      severity: Severity.High,
+    });
+    observeDockerRule(ctx, {
+      ruleId: "dockerfile.add.remote-url",
+      subject: dockerfile.path,
+      severity: Severity.High,
+      confidence: "high",
+      location: { file: dockerfile.path, line: instruction.line, snippet: instruction.raw },
+      evidence: { instruction: instruction.raw },
+    });
+  }
+}
+
+function reportCurlBashObservations(
+  ctx: RuleContext,
+  dockerfile: ParsedDockerfile,
+  severities: string[],
+  detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = [],
+): void {
+  for (const instruction of dockerfile.instructions) {
+    if (instruction.keyword !== "RUN") continue;
+    if (!/\b(?:curl|wget)\b[^|&;\n]*\|\s*(?:ba)?sh\b/i.test(instruction.value)) continue;
+    severities.push(Severity.High);
+    detections.push({
+      ruleId: "dockerfile.shell.curl-bash",
+      file: dockerfile.path,
+      line: instruction.line,
+      snippet: instruction.raw,
+      message: "curl|bash install pattern",
+      severity: Severity.High,
+    });
+    observeDockerRule(ctx, {
+      ruleId: "dockerfile.shell.curl-bash",
+      subject: dockerfile.path,
+      severity: Severity.High,
+      confidence: "high",
+      location: { file: dockerfile.path, line: instruction.line, snippet: instruction.raw },
+      evidence: { instruction: instruction.raw },
+    });
+  }
+}
+
+function reportMissingDockerignoreObservations(
+  ctx: RuleContext,
+  dockerfile: ParsedDockerfile,
+  repo: RepositoryContext,
+  severities: string[],
+  detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = [],
+): void {
+  const broadCopy = dockerfile.instructions.find(
+    (instruction) =>
+      (instruction.keyword === "COPY" || instruction.keyword === "ADD") &&
+      /(^|\s)\.(\s|$)/.test(instruction.value),
+  );
+  if (broadCopy === undefined) return;
+  if (repo.hasDockerignore(dockerfile.path)) return;
+  severities.push(Severity.Medium);
+  detections.push({
+    ruleId: "dockerfile.ignore.missing",
+    file: dockerfile.path,
+    line: broadCopy.line,
+    snippet: broadCopy.raw,
+    message: "Missing .dockerignore with broad COPY",
+    severity: Severity.Medium,
+  });
+  observeDockerRule(ctx, {
+    ruleId: "dockerfile.ignore.missing",
+    subject: dockerfile.path,
+    severity: Severity.Medium,
+    confidence: "high",
+    location: { file: dockerfile.path, line: broadCopy.line, snippet: broadCopy.raw },
+    evidence: { instruction: broadCopy.raw },
+  });
+}
+
+function reportSecretLayerHistoryObservations(
+  ctx: RuleContext,
+  dockerfile: ParsedDockerfile,
+  severities: string[],
+  detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = [],
+): void {
+  const credentialLike = /(?:^|[\s/])(?:id_rsa|id_ed25519|.*\.pem|\.npmrc|\.netrc|service-account.*\.json)(?:\s|$)/i;
+  for (let i = 0; i < dockerfile.instructions.length; i++) {
+    const instruction = dockerfile.instructions[i]!;
+    if (instruction.keyword !== "COPY" && instruction.keyword !== "ADD") continue;
+    if (!credentialLike.test(instruction.value)) continue;
+    const dest = instruction.value.trim().split(/\s+/).pop() ?? "";
+    const base = dest.split("/").pop() ?? dest;
+    const removedLater = dockerfile.instructions.slice(i + 1).some(
+      (later) =>
+        later.keyword === "RUN" &&
+        new RegExp(`\\brm\\b[^\\n]*${base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "i").test(later.value),
+    );
+    if (!removedLater) continue;
+    severities.push(Severity.High);
+    detections.push({
+      ruleId: "dockerfile.secret.rm-later-layer",
+      file: dockerfile.path,
+      line: instruction.line,
+      snippet: instruction.raw,
+      message: "Secret added then removed in a later layer",
+      severity: Severity.High,
+    });
+    observeDockerRule(ctx, {
+      ruleId: "dockerfile.secret.rm-later-layer",
+      subject: dockerfile.path,
+      severity: Severity.High,
+      confidence: "medium",
+      location: { file: dockerfile.path, line: instruction.line, snippet: instruction.raw },
+      evidence: { instruction: instruction.raw },
+    });
+  }
 }
 
 function reportPositiveSignals(ctx: RuleContext, dockerfile: ParsedDockerfile): void {
