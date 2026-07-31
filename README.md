@@ -1,41 +1,44 @@
-# dockerfile
+# container/dockerfile
 
-Inspects Dockerfile-style files and reports structured review observations through the Adversary SDK.
+**container/dockerfile** reviews Dockerfile-style files for **container build and runtime security**: unpinned bases, secrets in build args/env, broad build context copies, root runtime users, and dangerous shell patterns.
 
-## Build
+It is a **Dockerfile domain reviewer**, not a general image scanner (no registry pulls, no CVE DB of base layers). When it reports, the build can leak secrets or produce an unsafe runtime image.
 
-```sh
-npm install
-npm run build
-```
+## What it does
 
-## Run
+1. **Discovers** Dockerfile and `*.dockerfile` candidates (and related ignore files).
+2. **Runs deterministic detectors** with stable rule ids.
+3. **Synthesizes a review** through the SDK.
+4. Optionally **enhances** with a model when provided.
 
-```sh
-adversary run . --repo /path/to/repository
-```
+It never executes the scanned project as the product under review, never installs dependencies into it, and never needs network access to the target repository.
 
-## Test
+## What it detects
 
-```sh
-npm test
-```
+Every **shipped rule id**, severity, and short description lives in **[CHECKS.md](CHECKS.md)** — the audit surface for “what does this adversary look for?”
 
-## Layout
+Highlights:
 
-- `adversary.yaml` declares the adversary manifest.
-- `AGENTS.md` gives AI coding agents repository-specific engineering guidance.
-- `src/index.ts` contains the TypeScript SDK adversary.
-- `dist/index.js` is prebuilt so `adversary run . --repo ...` works immediately.
-- `test/index.test.ts` demonstrates testing rules with fixtures.
-- `fixtures/clean` should produce no findings.
-- `fixtures/vulnerable` should produce actionable Dockerfile findings.
-- `Dockerfile` packages the compiled adversary for the CLI.
+| Area | Examples |
+| --- | --- |
+| Base images | FROM without digest pin |
+| Secrets | ARG/ENV holding secret material; secrets removed only in later layers |
+| Context | Broad COPY/ADD of `.`; missing .dockerignore pairing |
+| Runtime | USER root in final stage |
+| Shell | curl|bash install patterns; remote ADD URLs |
 
-## Automatic detection
+### Ownership boundaries
 
-`adversary auto` selects the dockerfile adversary when changes include `Dockerfile` or `**/Dockerfile`, plus the other domain-specific patterns declared in `adversary.yaml`. Unrelated changes do not select it.
+Other official adversaries own adjacent classes so findings stay non-duplicative:
 
-## Issue catalog
+| Concern | Owned by |
+| --- | --- |
+| Committed secrets outside Dockerfiles | [`security/secrets`](https://github.com/adversarylabs/secrets-adversary) |
+| CI workflow supply chain | [`ci/github-actions`](https://github.com/adversarylabs/githubactions-adversary) |
+| Go module graph integrity | [`go/modules`](https://github.com/adversarylabs/go-modules-adversary) |
 
-What this adversary targets (P0 / P1 / LLM-only priorities, detection notes, and public pattern references) is documented in [docs/issue-catalog.md](docs/issue-catalog.md).
+## Precision stance
+
+- **High confidence** only for deterministic, evidence-backed patterns.
+- Clean fixtures must stay quiet; vulnerable fixtures must fire where graded fixtures exist.
+- Prefer missing a weak signal over a false positive on normal production code.
