@@ -219,6 +219,30 @@ test("versioned and integrity-checked artifact downloads stay quiet", async () =
   assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.external-artifact.mutable"), false);
 });
 
+test("stage-local version variables used without ARG are reported", async () => {
+  const output = await createApp().run({
+    input: { source: { path: fixturePath("missing-build-arg") } },
+    includeRawObservations: true,
+    write: false,
+  });
+
+  const observation = output.rawObservations?.find((item) => item.ruleId === "dockerfile.build-arg.missing");
+  assert.ok(observation);
+  assert.equal(observation.location?.line, 6);
+  assert.equal(observation.subject, "BUILD_VERSION");
+  assert.equal(observation.evidence?.stage, "runtime");
+  assert.equal(observation.confidence, "high");
+});
+
+test("declared, inherited, and explicitly defaulted version variables stay quiet", async () => {
+  const output = await createApp().run({
+    input: { source: { path: fixturePath("missing-build-arg-clean") } },
+    write: false,
+  });
+
+  assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.build-arg.missing"), false);
+});
+
 test("changed review scope excludes untouched Dockerfiles", async () => {
   const root = await mkdtemp(join(tmpdir(), "dockerfile-scope-"));
   await mkdir(join(root, "changed"), { recursive: true });

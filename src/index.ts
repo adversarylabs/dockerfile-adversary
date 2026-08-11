@@ -73,6 +73,7 @@ export function createApp(): Adversary {
       reportRemoteAddObservations(ctx, dockerfile, severities, detections);
       reportCurlBashObservations(ctx, dockerfile, severities, detections);
       reportMutableExternalArtifactObservations(ctx, dockerfile, severities, detections);
+      reportMissingBuildArgumentObservations(ctx, dockerfile, severities, detections);
       reportMissingDockerignoreObservations(ctx, dockerfile, repo, severities, detections);
       reportSecretLayerHistoryObservations(ctx, dockerfile, severities, detections);
       reportPositiveSignals(ctx, dockerfile);
@@ -362,6 +363,140 @@ function reportMutableExternalArtifactObservations(
       });
     }
   }
+}
+
+function reportMissingBuildArgumentObservations(
+  ctx: RuleContext,
+  dockerfile: ParsedDockerfile,
+  severities: string[],
+  detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = [],
+): void {
+  const stageByName = new Map(
+    dockerfile.stages.map((stage) => [stage.name.toLowerCase(), stage]),
+  );
+
+  for (const stage of dockerfile.stages) {
+    const available = inheritedBuildVariables(stage, stageByName);
+    for (const instruction of stage.instructions) {
+      if (instruction.keyword === "FROM") continue;
+
+      if (instruction.keyword === "ARG") {
+        for (const name of variableNames(instruction)) available.add(name);
+        continue;
+      }
+
+      if (instruction.keyword !== "RUN" && instruction.keyword !== "LABEL" &&
+          instruction.keyword !== "ENV") {
+        continue;
+      }
+
+      for (const reference of buildVariableReferences(instruction)) {
+        if (!isVersionBuildVariable(reference.name) || available.has(reference.name)) {
+          continue;
+        }
+
+        severities.push(Severity.Medium);
+        detections.push({
+          ruleId: "dockerfile.build-arg.missing",
+          file: dockerfile.path,
+          line: instruction.line,
+          snippet: instruction.raw,
+          message: `${reference.name} is used before it is declared in ${stage.name}.`,
+          severity: Severity.Medium,
+        });
+        observeDockerRule(ctx, {
+          ruleId: "dockerfile.build-arg.missing",
+          subject: reference.name,
+          severity: Severity.Medium,
+          confidence: "high",
+          location: { file: dockerfile.path, line: instruction.line },
+          evidence: {
+            stage: stage.name,
+            variable: reference.name,
+            instruction: instruction.raw,
+          },
+        });
+      }
+
+      if (instruction.keyword === "ENV") {
+        for (const name of variableNames(instruction)) available.add(name);
+      }
+    }
+  }
+}
+
+function inheritedBuildVariables(
+  stage: DockerfileStage,
+  stageByName: Map<string, DockerfileStage>,
+  visited = new Set<string>(),
+): Set<string> {
+  const variables = new Set<string>();
+  const parent = stageByName.get(stage.image.toLowerCase());
+  if (parent === undefined) {
+    return variables;
+  }
+
+  const parentKey = parent.name.toLowerCase();
+  if (visited.has(parentKey)) {
+    return variables;
+  }
+  visited.add(parentKey);
+
+  for (const name of inheritedBuildVariables(parent, stageByName, visited)) {
+    variables.add(name);
+  }
+  for (const instruction of parent.instructions) {
+    if (instruction.keyword === "ARG" || instruction.keyword === "ENV") {
+      for (const name of variableNames(instruction)) variables.add(name);
+    }
+  }
+  return variables;
+}
+
+function buildVariableReferences(instruction: DockerfileInstruction): Array<{ name: string }> {
+  if (instruction.keyword === "RUN" && instruction.value.trimStart().startsWith("[")) {
+    return [];
+  }
+
+  const references: Array<{ name: string }> = [];
+  const seen = new Set<string>();
+  const pattern = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(instruction.value)) !== null) {
+    if (isEscapedAt(instruction.value, match.index)) continue;
+    if (instruction.keyword === "RUN" && isInsideSingleQuotes(instruction.value, match.index)) continue;
+
+    const parameterOperation = match[2] ?? "";
+    if (/^:?[-+?=]/.test(parameterOperation)) continue;
+
+    const name = match[1] ?? match[3];
+    if (name !== undefined && !seen.has(name)) {
+      seen.add(name);
+      references.push({ name });
+    }
+  }
+  return references;
+}
+
+function isEscapedAt(value: string, offset: number): boolean {
+  let backslashes = 0;
+  for (let index = offset - 1; index >= 0 && value[index] === "\\"; index -= 1) {
+    backslashes += 1;
+  }
+  return backslashes % 2 === 1;
+}
+
+function isInsideSingleQuotes(value: string, offset: number): boolean {
+  let inside = false;
+  for (let index = 0; index < offset; index += 1) {
+    if (value[index] === "'") inside = !inside;
+  }
+  return inside;
+}
+
+function isVersionBuildVariable(name: string): boolean {
+  return /^(?:VERSION|BUILD_VERSION|APP_VERSION|APPLICATION_VERSION|RELEASE_VERSION|IMAGE_VERSION|PACKAGE_VERSION|COMPONENT_VERSION|ARTIFACT_VERSION)$/.test(name);
 }
 
 function externalURLs(value: string): string[] {
