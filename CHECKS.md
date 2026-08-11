@@ -73,6 +73,16 @@ Regression entry: package tests under `test/`.
 | **Stays quiet when** | FROM image:tag@sha256:… |
 | **Remediation** | Pin production bases by digest |
 
+### `dockerfile.external-artifact.mutable`
+
+| | |
+| --- | --- |
+| **What** | Direct artifact download uses a moving or unversioned URL |
+| **Why** | Rebuilds can consume different external content without a Dockerfile change |
+| **Looks for** | `curl`/`wget` URLs with `latest`, moving branches, or unversioned artifact filenames |
+| **Stays quiet when** | The URL contains a stable version/commit or the same `RUN` verifies a checksum/signature |
+| **Remediation** | Select a stable artifact and verify its integrity before use |
+
 ### `dockerfile.copy.broad-context`
 
 | | |

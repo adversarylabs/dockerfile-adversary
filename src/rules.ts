@@ -154,6 +154,24 @@ export const dockerfileRules = [
     groupKey: (observation) => `dockerfile.shell.curl-bash:${observation.location?.file ?? observation.subject}`,
   }),
   defineRule({
+    id: "dockerfile.external-artifact.mutable",
+    category: "supply-chain",
+    title: {
+      singular: "External artifact uses a mutable download URL",
+      plural: "External artifacts use mutable download URLs",
+    },
+    summary: {
+      singular: "The download uses an unpinned dependency version from a mutable URL.",
+      grouped: "{count} instructions download unpinned dependency versions from mutable URLs.",
+    },
+    whyItMatters: "Moving download URLs can resolve to different artifact contents without a Dockerfile change.",
+    impact: "Rebuilds can silently consume a different dependency or execute content that was never reviewed.",
+    recommendation: "Use a versioned or commit-addressed artifact URL and verify the downloaded checksum or signature before use.",
+    remediation: { complexity: "small" },
+    tags: ["supply-chain", "reproducibility"],
+    groupKey: (observation) => `dockerfile.external-artifact.mutable:${observation.location?.file ?? observation.subject}`,
+  }),
+  defineRule({
     id: "dockerfile.ignore.missing",
     category: "build-context",
     title: {
