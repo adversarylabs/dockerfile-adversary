@@ -83,6 +83,16 @@ Regression entry: package tests under `test/`.
 | **Stays quiet when** | The URL contains a stable version/commit or the same `RUN` verifies a checksum/signature |
 | **Remediation** | Select a stable artifact and verify its integrity before use |
 
+### `dockerfile.build-arg.missing`
+
+| | |
+| --- | --- |
+| **What** | A version build variable is used without a stage-visible declaration |
+| **Why** | Docker build arguments are scoped to the stage that declares or inherits them |
+| **Looks for** | Version variables referenced by `RUN`, `LABEL`, or `ENV` before a matching `ARG`/`ENV` |
+| **Stays quiet when** | The variable is declared first, inherited from a named parent stage, or has an explicit parameter default |
+| **Remediation** | Declare `ARG` before first use in every independent stage |
+
 ### `dockerfile.copy.broad-context`
 
 | | |

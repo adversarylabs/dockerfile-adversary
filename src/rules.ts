@@ -172,6 +172,27 @@ export const dockerfileRules = [
     groupKey: (observation) => `dockerfile.external-artifact.mutable:${observation.location?.file ?? observation.subject}`,
   }),
   defineRule({
+    id: "dockerfile.build-arg.missing",
+    category: "reproducibility",
+    title: {
+      singular: "Version build variable is not declared in this stage",
+      plural: "Version build variables are not declared in their stages",
+    },
+    summary: {
+      singular: "{stage} stage uses {subject} before declaring it as ARG or ENV.",
+      grouped: "{count} instructions in {stage} stage use {subject} without a stage-visible declaration.",
+    },
+    whyItMatters: "Docker build arguments are stage-scoped and are unavailable before their ARG declaration.",
+    impact: "Release metadata or build inputs can silently become empty or fall back to an unintended value.",
+    recommendation: "Declare the variable with ARG before its first use in each independent stage. A stage based on a named earlier stage inherits its ARG declarations; unrelated stages need their own declaration.",
+    remediation: { complexity: "small" },
+    tags: ["build-configuration", "reproducibility"],
+    groupKey: (observation) => {
+      const stage = typeof observation.evidence?.stage === "string" ? observation.evidence.stage : "stage";
+      return `dockerfile.build-arg.missing:${observation.location?.file ?? "Dockerfile"}:${stage}:${observation.subject}`;
+    },
+  }),
+  defineRule({
     id: "dockerfile.ignore.missing",
     category: "build-context",
     title: {
