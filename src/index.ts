@@ -72,6 +72,7 @@ export function createApp(): Adversary {
       reportRuntimeObservations(ctx, dockerfile, severities, detections);
       reportRemoteAddObservations(ctx, dockerfile, severities, detections);
       reportCurlBashObservations(ctx, dockerfile, severities, detections);
+      reportMutableExternalArtifactObservations(ctx, dockerfile, severities, detections);
       reportMissingDockerignoreObservations(ctx, dockerfile, repo, severities, detections);
       reportSecretLayerHistoryObservations(ctx, dockerfile, severities, detections);
       reportPositiveSignals(ctx, dockerfile);
@@ -104,16 +105,18 @@ export function createApp(): Adversary {
 }
 
 async function loadDockerfiles(ctx: RuleContext): Promise<ParsedDockerfile[]> {
-  const paths = (await walkRepository(ctx.repoPath, MAX_DISCOVERY_FILES)).filter(isDockerfilePath).sort();
-  const dockerfiles: ParsedDockerfile[] = [];
+  const sources = await ctx.loadInScopeSources({
+    include: isDockerfilePath,
+    ignoreDirectories: [...SKIPPED_DIRECTORIES],
+    limit: MAX_DISCOVERY_FILES,
+  });
 
-  for (const path of paths) {
-    const raw = await readFile(join(ctx.repoPath, path), "utf8");
-    const instructions = parseDockerfile(raw);
-    dockerfiles.push({ path, instructions, stages: parseStages(instructions) });
-  }
-
-  return dockerfiles;
+  return sources
+    .sort((left, right) => left.path.localeCompare(right.path))
+    .map(({ path, content }) => {
+      const instructions = parseDockerfile(content);
+      return { path, instructions, stages: parseStages(instructions) };
+    });
 }
 
 async function inspectRepository(ctx: RuleContext): Promise<RepositoryContext> {
@@ -323,6 +326,79 @@ function reportCurlBashObservations(
       evidence: { instruction: instruction.raw },
     });
   }
+}
+
+function reportMutableExternalArtifactObservations(
+  ctx: RuleContext,
+  dockerfile: ParsedDockerfile,
+  severities: string[],
+  detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = [],
+): void {
+  for (const instruction of dockerfile.instructions) {
+    if (instruction.keyword !== "RUN" || !/\b(?:curl|wget)\b/i.test(instruction.value)) continue;
+    if (/\b(?:curl|wget)\b[^|&;\n]*\|\s*(?:ba)?sh\b/i.test(instruction.value)) continue;
+    if (verifiesDownloadedArtifact(instruction.value)) continue;
+
+    for (const url of externalURLs(instruction.value)) {
+      const mutability = mutableArtifactReason(url);
+      if (mutability === undefined) continue;
+
+      severities.push(Severity.Medium);
+      detections.push({
+        ruleId: "dockerfile.external-artifact.mutable",
+        file: dockerfile.path,
+        line: instruction.line,
+        snippet: instruction.raw,
+        message: "External artifact uses a mutable download URL",
+        severity: Severity.Medium,
+      });
+      observeDockerRule(ctx, {
+        ruleId: "dockerfile.external-artifact.mutable",
+        subject: dockerfile.path,
+        severity: Severity.Medium,
+        confidence: mutability === "moving-selector" ? "high" : "medium",
+        location: { file: dockerfile.path, line: instruction.line, snippet: instruction.raw },
+        evidence: { instruction: instruction.raw, url, mutability },
+      });
+    }
+  }
+}
+
+function externalURLs(value: string): string[] {
+  return [...value.matchAll(/https?:\/\/[^\s"'\\|;&)]+/gi)].map((match) => match[0].replace(/[.,]+$/, ""));
+}
+
+function mutableArtifactReason(url: string): "moving-selector" | "unversioned-artifact" | undefined {
+  const lower = url.toLowerCase();
+  if (/(?:^|[/?#._-])(?:latest|main|master)(?:$|[/?#._-])/.test(lower)) {
+    return "moving-selector";
+  }
+  if (hasStableArtifactSelector(url)) {
+    return undefined;
+  }
+  if (/(?:\.tar(?:\.(?:gz|bz2|xz|zst))?|\.zip|\.jar|\.war|\.whl|\.deb|\.rpm|\.apk|\.tgz|\.txz|\.gz|\.xz|\.bz2|\.exe|\.msi|\.bin|\.sh)(?:[?#]|$)/i.test(url)) {
+    return "unversioned-artifact";
+  }
+  return undefined;
+}
+
+function hasStableArtifactSelector(url: string): boolean {
+  return (
+    /(?:^|[/?#._-])v?\d+(?:\.\d+)+(?:[-+][a-z0-9.-]+)?(?:$|[/?#._-])/i.test(url) ||
+    /(?:^|[/?#._-])[a-f0-9]{12,40}(?:$|[/?#._-])/i.test(url) ||
+    /\$\{?[a-z0-9_]*version\}?/i.test(url)
+  );
+}
+
+function verifiesDownloadedArtifact(value: string): boolean {
+  return (
+    /\bsha(?:256|384|512)sum\b[^;&\n]*(?:\s-c\b|\s--check\b)/i.test(value) ||
+    /\bshasum\b[^;&\n]*\s-a\s+(?:256|384|512)\b[^;&\n]*(?:\s-c\b|\s--check\b)/i.test(value) ||
+    /\bopenssl\s+dgst\b[^;&\n]*(?:-verify|-prverify)\b/i.test(value) ||
+    /\bgpg2?\s+--verify\b/i.test(value) ||
+    /\bcosign\s+verify\b/i.test(value) ||
+    /\bminisign\s+-V\b/i.test(value)
+  );
 }
 
 function reportMissingDockerignoreObservations(

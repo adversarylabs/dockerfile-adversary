@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import { Adversary, Severity } from "@adversarylabs/sdk";
 import { createApp } from "../src/index.ts";
@@ -188,6 +190,64 @@ const p0Cases = [
   { key: "p0-missing-dockerignore", id: "dockerfile.ignore.missing", clean: "p0-missing-dockerignore-clean" },
   { key: "p0-secret-layer", id: "dockerfile.secret.rm-later-layer", clean: "p0-secret-layer-clean" },
 ] as const;
+
+test("mutable direct artifact downloads are reported and grouped", async () => {
+  const output = await createApp().run({
+    input: { source: { path: fixturePath("mutable-external-artifact") } },
+    write: false,
+  });
+
+  const finding = output.findings.find((item) => item.ruleId === "dockerfile.external-artifact.mutable");
+  assert.ok(finding);
+  assert.equal(finding.summary, "Four instructions download unpinned dependency versions from mutable URLs.");
+  assert.deepEqual(
+    finding.evidence.map((evidence) => evidence.location?.line),
+    [2, 3, 4, 5],
+  );
+  assert.deepEqual(
+    finding.evidence.map((evidence) => evidence.data?.mutability),
+    ["moving-selector", "moving-selector", "unversioned-artifact", "unversioned-artifact"],
+  );
+});
+
+test("versioned and integrity-checked artifact downloads stay quiet", async () => {
+  const output = await createApp().run({
+    input: { source: { path: fixturePath("mutable-external-artifact-clean") } },
+    write: false,
+  });
+
+  assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.external-artifact.mutable"), false);
+});
+
+test("changed review scope excludes untouched Dockerfiles", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dockerfile-scope-"));
+  await mkdir(join(root, "changed"), { recursive: true });
+  await mkdir(join(root, "untouched"), { recursive: true });
+  const safeDockerfile = "FROM alpine:3.20@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nUSER 1000\n";
+  await writeFile(join(root, "changed", "Dockerfile"), safeDockerfile);
+  await writeFile(
+    join(root, "untouched", "Dockerfile"),
+    `${safeDockerfile}RUN wget https://example.test/tool-latest.tar.gz\n`,
+  );
+
+  const output = await createApp().run({
+    input: {
+      source: { path: root },
+      change: {
+        type: "diff",
+        base_ref: "base",
+        head_ref: "head",
+        scan_mode: "changed",
+        changed_files: ["changed/Dockerfile"],
+      },
+    },
+    write: false,
+  });
+
+  assert.equal(output.target.filesScanned, 1);
+  assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.external-artifact.mutable"), false);
+  assert.equal(output.findings.some((item) => item.evidence.some((evidence) => evidence.location?.file === "untouched/Dockerfile")), false);
+});
 
 test("dockerfile P0 catalog rules fire on vulnerable and stay quiet on clean", async () => {
   for (const rule of p0Cases) {
