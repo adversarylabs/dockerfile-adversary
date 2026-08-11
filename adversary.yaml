@@ -1,5 +1,5 @@
 name: container/dockerfile
-version: 0.0.13
+version: 0.0.14
 description: Reviews Dockerfile-style files for container build and runtime security concerns.
 
 triggers:
