@@ -458,14 +458,17 @@ function buildVariableReferences(instruction: DockerfileInstruction): Array<{ na
     return [];
   }
 
+  const value = instruction.keyword === "RUN"
+    ? instruction.value.slice(0, shellCommentStart(instruction.value))
+    : instruction.value;
   const references: Array<{ name: string }> = [];
   const seen = new Set<string>();
   const pattern = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)([^}]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g;
   let match: RegExpExecArray | null;
 
-  while ((match = pattern.exec(instruction.value)) !== null) {
-    if (isEscapedAt(instruction.value, match.index)) continue;
-    if (instruction.keyword === "RUN" && isInsideSingleQuotes(instruction.value, match.index)) continue;
+  while ((match = pattern.exec(value)) !== null) {
+    if (isEscapedAt(value, match.index)) continue;
+    if (instruction.keyword === "RUN" && isInsideSingleQuotes(value, match.index)) continue;
 
     const parameterOperation = match[2] ?? "";
     if (/^:?[-+?=]/.test(parameterOperation)) continue;
@@ -477,6 +480,32 @@ function buildVariableReferences(instruction: DockerfileInstruction): Array<{ na
     }
   }
   return references;
+}
+
+function shellCommentStart(value: string): number {
+  let quote: "single" | "double" | undefined;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (character === "\\" && quote !== "single") {
+      index += 1;
+      continue;
+    }
+    if (character === "'" && quote !== "double") {
+      quote = quote === "single" ? undefined : "single";
+      continue;
+    }
+    if (character === '"' && quote !== "single") {
+      quote = quote === "double" ? undefined : "double";
+      continue;
+    }
+    if (character === "#" && quote === undefined &&
+        (index === 0 || /[\s;&|()<>]/.test(value[index - 1] ?? ""))) {
+      return index;
+    }
+  }
+
+  return value.length;
 }
 
 function isEscapedAt(value: string, offset: number): boolean {

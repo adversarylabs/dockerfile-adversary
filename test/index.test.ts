@@ -243,6 +243,42 @@ test("declared, inherited, and explicitly defaulted version variables stay quiet
   assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.build-arg.missing"), false);
 });
 
+test("RUN shell comments do not create build variable references", async () => {
+  const root = await mkdtemp(join(tmpdir(), "dockerfile-shell-comments-"));
+  await writeFile(
+    join(root, "Dockerfile"),
+    [
+      "FROM scratch",
+      'RUN echo ok # "$APP_VERSION" is comment text',
+      'RUN echo "# literal" "$BUILD_VERSION"',
+      'RUN echo \\# "$RELEASE_VERSION"',
+      'RUN echo "$IMAGE_VERSION" # "$PACKAGE_VERSION" is comment text',
+      'RUN echo release#candidate "$COMPONENT_VERSION"',
+      "USER 1000",
+      "",
+    ].join("\n"),
+  );
+
+  const output = await createApp().run({
+    input: { source: { path: root } },
+    includeRawObservations: true,
+    write: false,
+  });
+  const observations = output.rawObservations?.filter(
+    (item) => item.ruleId === "dockerfile.build-arg.missing",
+  ) ?? [];
+
+  assert.deepEqual(
+    observations.map((item) => [item.location?.line, item.subject]),
+    [
+      [3, "BUILD_VERSION"],
+      [4, "RELEASE_VERSION"],
+      [5, "IMAGE_VERSION"],
+      [6, "COMPONENT_VERSION"],
+    ],
+  );
+});
+
 test("changed review scope excludes untouched Dockerfiles", async () => {
   const root = await mkdtemp(join(tmpdir(), "dockerfile-scope-"));
   await mkdir(join(root, "changed"), { recursive: true });
