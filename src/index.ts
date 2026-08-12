@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 
+import { execFile } from "node:child_process";
 import { readdir, readFile } from "node:fs/promises";
 import { dirname, join, sep } from "node:path";
+import { promisify } from "node:util";
 import { Adversary, Severity, type RuleContext } from "@adversarylabs/sdk";
 import { observeDockerRule, registerDockerfileRules } from "./rules.js";
 import { runModelDockerfileReview } from "./model-review.js";
@@ -11,6 +13,11 @@ interface DockerfileInstruction {
   value: string;
   line: number;
   raw: string;
+}
+
+interface DockerfileChangeScope {
+  status: "added" | "modified" | "repository";
+  changedLines: Set<number>;
 }
 
 interface DockerfileStage {
@@ -25,6 +32,7 @@ interface ParsedDockerfile {
   path: string;
   instructions: DockerfileInstruction[];
   stages: DockerfileStage[];
+  changeScope: DockerfileChangeScope;
 }
 
 interface RepositoryContext {
@@ -36,6 +44,7 @@ interface RepositoryContext {
 }
 
 const SECRET_NAME_PATTERN = /(?:^|_)(?:TOKEN|SECRET|PASSWORD|PASSWD|PRIVATE_KEY|API_KEY|ACCESS_KEY|AUTH|CREDENTIAL)(?:_|$)/i;
+const execute = promisify(execFile);
 const MAX_REPOSITORY_FILES = 600;
 const MAX_DISCOVERY_FILES = 5000;
 const SKIPPED_DIRECTORIES = new Set([
@@ -112,12 +121,78 @@ async function loadDockerfiles(ctx: RuleContext): Promise<ParsedDockerfile[]> {
     limit: MAX_DISCOVERY_FILES,
   });
 
-  return sources
+  const wholeTarget = ctx.change === null || ctx.change.scanMode === "all";
+  return Promise.all(sources
     .sort((left, right) => left.path.localeCompare(right.path))
-    .map(({ path, content }) => {
+    .map(async ({ path, content, status }) => {
       const instructions = parseDockerfile(content);
-      return { path, instructions, stages: parseStages(instructions) };
+      return {
+        path,
+        instructions,
+        stages: parseStages(instructions),
+        changeScope: wholeTarget || status === "repository"
+          ? { status: "repository", changedLines: new Set<number>() }
+          : await dockerfileChangeScope(ctx, path),
+      };
+    }));
+}
+
+async function dockerfileChangeScope(ctx: RuleContext, path: string): Promise<DockerfileChangeScope> {
+  const base = ctx.change?.baseRef;
+  if (base === undefined || !(await existsAtRevision(ctx.repoPath, base, path))) {
+    return { status: "added", changedLines: new Set<number>() };
+  }
+
+  const args = ["diff", "--unified=0", base];
+  const head = ctx.change?.headRef;
+  if (head !== undefined && !ctx.change?.worktree) args.push(head);
+  args.push("--", path);
+  try {
+    const { stdout } = await execute("git", ["-C", ctx.repoPath, ...args], {
+      encoding: "utf8",
+      maxBuffer: 8 * 1024 * 1024,
     });
+    return { status: "modified", changedLines: changedLineNumbers(stdout) };
+  } catch {
+    return { status: "modified", changedLines: new Set<number>() };
+  }
+}
+
+async function existsAtRevision(repoPath: string, revision: string, path: string): Promise<boolean> {
+  try {
+    await execute("git", ["-C", repoPath, "cat-file", "-e", `${revision}:${path}`], {
+      maxBuffer: 1024 * 1024,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function changedLineNumbers(patch: string): Set<number> {
+  const lines = new Set<number>();
+  for (const match of patch.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)) {
+    const start = Number(match[1]);
+    const count = match[2] === undefined ? 1 : Number(match[2]);
+    for (let line = start; line < start + count; line += 1) lines.add(line);
+  }
+  return lines;
+}
+
+function areDirectLinesEligible(dockerfile: ParsedDockerfile, lines: readonly number[]): boolean {
+  if (dockerfile.changeScope.status !== "modified") return true;
+  return lines.some((line) => dockerfile.changeScope.changedLines.has(line));
+}
+
+function instructionLinesMatching(
+  instruction: DockerfileInstruction,
+  predicate: (line: string) => boolean,
+): number[] {
+  const lines = instruction.raw.split(/\r?\n/)
+    .map((line, index) => ({ line, number: instruction.line + index }))
+    .filter(({ line }) => predicate(line))
+    .map(({ number }) => number);
+  return lines.length > 0 ? lines : [instruction.line];
 }
 
 async function inspectRepository(ctx: RuleContext): Promise<RepositoryContext> {
@@ -155,6 +230,8 @@ async function inspectRepository(ctx: RuleContext): Promise<RepositoryContext> {
 
 function reportBaseImageObservations(ctx: RuleContext, dockerfile: ParsedDockerfile, repo: RepositoryContext, severities: string[], detections: Array<{ ruleId: string; file: string; line: number; snippet: string; message: string; severity: string }> = []): void {
   for (const stage of dockerfile.stages) {
+    const anchors = instructionLinesMatching(stage.from, (line) => line.includes(stage.image));
+    if (!stage.image.includes("$") && !areDirectLinesEligible(dockerfile, anchors)) continue;
     if (isScratch(stage.image) || hasDigest(stage.image)) {
       continue;
     }
@@ -187,6 +264,8 @@ function reportSecretObservations(ctx: RuleContext, dockerfile: ParsedDockerfile
       if (!SECRET_NAME_PATTERN.test(name)) {
         continue;
       }
+      const anchors = instructionLinesMatching(instruction, (line) => new RegExp(`\\b${escapeRegExp(name)}\\b`).test(line));
+      if (!areDirectLinesEligible(dockerfile, anchors)) continue;
 
       severities.push(Severity.High);
       detections.push({ ruleId: "dockerfile.secret.arg-env", file: dockerfile.path, line: instruction.line, snippet: instruction.raw, message: `Secret-like ${name} in ARG/ENV`, severity: Severity.High });
@@ -279,7 +358,10 @@ function reportRemoteAddObservations(
 ): void {
   for (const instruction of dockerfile.instructions) {
     if (instruction.keyword !== "ADD") continue;
-    if (!/^https?:\/\//i.test(instruction.value.trim().split(/\s+/)[0] ?? "")) continue;
+    const url = instruction.value.trim().split(/\s+/)[0] ?? "";
+    if (!/^https?:\/\//i.test(url)) continue;
+    const anchors = instructionLinesMatching(instruction, (line) => line.includes(url));
+    if (!areDirectLinesEligible(dockerfile, anchors)) continue;
     severities.push(Severity.High);
     detections.push({
       ruleId: "dockerfile.add.remote-url",
@@ -309,6 +391,11 @@ function reportCurlBashObservations(
   for (const instruction of dockerfile.instructions) {
     if (instruction.keyword !== "RUN") continue;
     if (!/\b(?:curl|wget)\b[^|&;\n]*\|\s*(?:ba)?sh\b/i.test(instruction.value)) continue;
+    const anchors = instructionLinesMatching(
+      instruction,
+      (line) => /\b(?:curl|wget)\b/i.test(line) || /\|\s*(?:ba)?sh\b/i.test(line),
+    );
+    if (!areDirectLinesEligible(dockerfile, anchors)) continue;
     severities.push(Severity.High);
     detections.push({
       ruleId: "dockerfile.shell.curl-bash",
@@ -900,6 +987,10 @@ function isScratch(image: string): boolean {
 function isRootUser(value: string): boolean {
   const user = value.trim().split(/\s+/, 1)[0].split(":", 1)[0].toLowerCase();
   return user === "root" || user === "0";
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function dockerignorePathFor(dockerfilePath: string): string {

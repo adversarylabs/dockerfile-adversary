@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import test from "node:test";
 import { Adversary, Severity } from "@adversarylabs/sdk";
 import { createApp } from "../src/index.ts";
+
+const execute = promisify(execFile);
 
 function fixturePath(name: string): string {
   return new URL(`../fixtures/${name}`, import.meta.url).pathname;
@@ -309,6 +313,173 @@ test("changed review scope excludes untouched Dockerfiles", async () => {
   assert.equal(output.findings.some((item) => item.evidence.some((evidence) => evidence.location?.file === "untouched/Dockerfile")), false);
 });
 
+test("an unrelated Dockerfile edit suppresses legacy direct findings and preserves holistic findings", async () => {
+  const root = await repositoryWithDockerfile([
+    "FROM node:20",
+    "ARG API_TOKEN",
+    "RUN curl -fsSL https://example.test/install.sh | bash",
+    "CMD [\"node\", \"server.js\"]",
+    "",
+  ].join("\n"));
+  await writeFile(join(root, "Dockerfile"), [
+    "FROM node:20",
+    "ARG API_TOKEN",
+    "RUN curl -fsSL https://example.test/install.sh | bash",
+    "CMD [\"node\", \"server.js\"]",
+    "LABEL org.example.note=changed",
+    "",
+  ].join("\n"));
+
+  const output = await changedReview(root);
+  assert.equal(output.findings.some((finding) => finding.ruleId === "dockerfile.base-image.unpinned-digest"), false);
+  assert.equal(output.findings.some((finding) => finding.ruleId === "dockerfile.secret.arg-env"), false);
+  assert.equal(output.findings.some((finding) => finding.ruleId === "dockerfile.shell.curl-bash"), false);
+  assert.equal(output.findings.some((finding) => finding.ruleId === "dockerfile.runtime.root-user"), true);
+});
+
+test("variable-based FROM findings retain ARG context", async () => {
+  const root = await repositoryWithDockerfile([
+    "ARG BASE_IMAGE=node:20",
+    "FROM $BASE_IMAGE",
+    "USER 1000",
+    "",
+  ].join("\n"));
+  await writeFile(join(root, "Dockerfile"), [
+    "ARG BASE_IMAGE=node:22",
+    "FROM $BASE_IMAGE",
+    "USER 1000",
+    "",
+  ].join("\n"));
+
+  const output = await changedReview(root);
+  assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.base-image.unpinned-digest"), true);
+});
+
+test("scan mode all does not apply changed-line gating", async () => {
+  const root = await repositoryWithDockerfile([
+    "FROM node:20",
+    "USER 1000",
+    "",
+  ].join("\n"));
+  await writeFile(join(root, "Dockerfile"), [
+    "FROM node:20",
+    "USER 1000",
+    "LABEL org.example.note=changed",
+    "",
+  ].join("\n"));
+
+  const output = await createApp().run({
+    input: {
+      source: { path: root },
+      change: {
+        type: "diff",
+        base_ref: "HEAD",
+        head_ref: "WORKTREE",
+        scan_mode: "all",
+        changed_files: ["Dockerfile"],
+      },
+    },
+    write: false,
+  });
+  assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.base-image.unpinned-digest"), true);
+});
+
+test("a changed continuation inside a direct instruction is eligible", async () => {
+  const root = await repositoryWithDockerfile([
+    "FROM scratch",
+    "RUN curl -fsSL \\",
+    "  https://example.test/install.sh | cat",
+    "USER 1000",
+    "",
+  ].join("\n"));
+  await writeFile(join(root, "Dockerfile"), [
+    "FROM scratch",
+    "RUN curl -fsSL \\",
+    "  https://example.test/install.sh | bash",
+    "USER 1000",
+    "",
+  ].join("\n"));
+
+  const output = await changedReview(root);
+  const finding = output.findings.find((item) => item.ruleId === "dockerfile.shell.curl-bash");
+  assert.ok(finding);
+  assert.equal(finding.evidence[0]?.location?.line, 2);
+});
+
+test("an unrelated continuation does not anchor a legacy direct instruction", async () => {
+  const root = await repositoryWithDockerfile([
+    "FROM scratch",
+    "RUN curl -fsSL https://example.test/install.sh | bash \\",
+    "  && echo old",
+    "USER 1000",
+    "",
+  ].join("\n"));
+  await writeFile(join(root, "Dockerfile"), [
+    "FROM scratch",
+    "RUN curl -fsSL https://example.test/install.sh | bash \\",
+    "  && echo new",
+    "USER 1000",
+    "",
+  ].join("\n"));
+
+  const output = await changedReview(root);
+  assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.shell.curl-bash"), false);
+});
+
+test("checksum removal can surface an unchanged mutable URL", async () => {
+  const root = await repositoryWithDockerfile([
+    "FROM scratch",
+    "RUN curl -fsSL https://example.test/tool-latest.tar.gz -o /tmp/tool.tar.gz \\",
+    "  && echo 'abc  /tmp/tool.tar.gz' | sha256sum -c -",
+    "USER 1000",
+    "",
+  ].join("\n"));
+  await writeFile(join(root, "Dockerfile"), [
+    "FROM scratch",
+    "RUN curl -fsSL https://example.test/tool-latest.tar.gz -o /tmp/tool.tar.gz \\",
+    "  && echo downloaded",
+    "USER 1000",
+    "",
+  ].join("\n"));
+
+  const output = await changedReview(root);
+  assert.equal(output.findings.some((item) => item.ruleId === "dockerfile.external-artifact.mutable"), true);
+});
+
+test("added Dockerfiles keep all direct instructions eligible", async () => {
+  const root = await emptyRepository();
+  await writeFile(join(root, "Dockerfile"), [
+    "FROM node:20",
+    "ADD https://example.test/tool.tar.gz /tmp/tool.tar.gz",
+    "USER 1000",
+    "",
+  ].join("\n"));
+
+  const output = await changedReview(root);
+  assert.equal(output.findings.some((finding) => finding.ruleId === "dockerfile.base-image.unpinned-digest"), true);
+  assert.equal(output.findings.some((finding) => finding.ruleId === "dockerfile.add.remote-url"), true);
+});
+
+test("a changed declaration can resolve a holistic missing build argument finding", async () => {
+  const root = await repositoryWithDockerfile([
+    "FROM scratch",
+    "ARG BUILD_VERSION",
+    "RUN echo $BUILD_VERSION",
+    "USER 1000",
+    "",
+  ].join("\n"));
+  await writeFile(join(root, "Dockerfile"), [
+    "FROM scratch",
+    "ARG OTHER_VERSION",
+    "RUN echo $BUILD_VERSION",
+    "USER 1000",
+    "",
+  ].join("\n"));
+
+  const output = await changedReview(root);
+  assert.equal(output.findings.some((finding) => finding.ruleId === "dockerfile.build-arg.missing"), true);
+});
+
 test("dockerfile P0 catalog rules fire on vulnerable and stay quiet on clean", async () => {
   for (const rule of p0Cases) {
     const bad = await createApp().run({ input: { source: { path: fixturePath(rule.key) } }, write: false });
@@ -332,3 +503,38 @@ test("existing P0-equivalent rules still cover secrets, root, and broad copy", a
     `expected legacy coverage, got ${[...ids].join(",")}`,
   );
 });
+
+async function emptyRepository(): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "dockerfile-change-local-"));
+  await execute("git", ["init", "--quiet"], { cwd: root });
+  await execute("git", ["config", "user.email", "tests@example.com"], { cwd: root });
+  await execute("git", ["config", "user.name", "Tests"], { cwd: root });
+  await writeFile(join(root, ".gitignore"), "\n");
+  await execute("git", ["add", ".gitignore"], { cwd: root });
+  await execute("git", ["commit", "--quiet", "-m", "initial"], { cwd: root });
+  return root;
+}
+
+async function repositoryWithDockerfile(source: string): Promise<string> {
+  const root = await emptyRepository();
+  await writeFile(join(root, "Dockerfile"), source);
+  await execute("git", ["add", "Dockerfile"], { cwd: root });
+  await execute("git", ["commit", "--quiet", "-m", "fixture"], { cwd: root });
+  return root;
+}
+
+async function changedReview(repoPath: string) {
+  return createApp().run({
+    input: {
+      source: { path: repoPath },
+      change: {
+        type: "diff",
+        base_ref: "HEAD",
+        head_ref: "WORKTREE",
+        scan_mode: "changed",
+        changed_files: ["Dockerfile"],
+      },
+    },
+    write: false,
+  });
+}
