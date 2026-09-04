@@ -29,5 +29,5 @@ test("bundled runtime executes without node_modules and reports its release vers
   });
 
   assert.equal(result.adversary.name, "dockerfile");
-  assert.equal(result.adversary.version, "0.0.18");
+  assert.equal(result.adversary.version, "0.0.20");
 });
